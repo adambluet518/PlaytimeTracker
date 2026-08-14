@@ -384,10 +384,11 @@
 
     <script>
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        //  CONFIG
+        //  CONFIG - Your API key is now set!
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         const BIN_ID = '6a7e596af5f4af5e2913a53c';
-        const API_KEY = '$2a$10$3Xa0TXlJb7N58Vt.n9SPmOfZgS5YwkZtQib6rMwS8SryAW/xpIIjm'; // your master key
+        const API_KEY = '$2a$10$Wt9uWCbOUzdn7kj5BqbXfO/nNtmZNWyk9N/zDECtyLRmY/j1Uqk7K';
+        const USE_LOCAL_STORAGE = false;  // Keep false to use JSONBin
 
         let data = null;
         let updateTimer = null;
@@ -458,32 +459,91 @@
         }
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        //  JSONBin CRUD
+        //  DATA STORAGE (JSONBin + LocalStorage fallback)
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        function getDefaultData() {
+            return {
+                players: {},
+                globalSettings: { maxDaysHistory: 100, lastUpdated: new Date().toISOString() },
+                metadata: { version: '1.0', description: 'Video Game Playtime Tracker' }
+            };
+        }
+
         async function fetchData() {
             try {
+                if (USE_LOCAL_STORAGE) {
+                    // Use localStorage for testing
+                    const saved = localStorage.getItem('gameTrackerData');
+                    if (saved) {
+                        data = JSON.parse(saved);
+                    } else {
+                        data = getDefaultData();
+                    }
+                    render();
+                    toast('✅ Data loaded from local storage!', 'success');
+                    return;
+                }
+
+                // Try JSONBin
                 const res = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}`, {
                     headers: { 'X-Master-Key': API_KEY }
                 });
-                if (!res.ok) throw new Error('Failed to fetch');
+                
+                if (res.status === 401) {
+                    toast('⚠️ Invalid API key! Using local storage instead.', 'error');
+                    // Fallback to localStorage
+                    const saved = localStorage.getItem('gameTrackerData');
+                    if (saved) {
+                        data = JSON.parse(saved);
+                    } else {
+                        data = getDefaultData();
+                    }
+                    render();
+                    return;
+                }
+                
+                if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                
                 const json = await res.json();
                 data = json.record;
                 // ensure structure
                 if (!data.players) data.players = {};
                 if (!data.globalSettings) data.globalSettings = { maxDaysHistory: 100, lastUpdated: new Date().toISOString() };
                 if (!data.metadata) data.metadata = { version: '1.0', description: 'Video Game Playtime Tracker' };
+                
+                // Also save to localStorage as backup
+                localStorage.setItem('gameTrackerData', JSON.stringify(data));
+                
                 render();
-                toast('✅ Data loaded!', 'success');
+                toast('✅ Data loaded from JSONBin!', 'success');
             } catch (err) {
                 toast('❌ Error loading data: ' + err.message, 'error');
-                document.getElementById('playersContainer').innerHTML =
-                    `<div class="empty-state"><span>⚠️</span>Could not load data.<br><button class="btn btn-info" onclick="fetchData()">Retry</button></div>`;
+                // Try localStorage fallback
+                const saved = localStorage.getItem('gameTrackerData');
+                if (saved) {
+                    data = JSON.parse(saved);
+                    render();
+                    toast('⚠️ Using cached data from local storage', 'info');
+                } else {
+                    data = getDefaultData();
+                    render();
+                    document.getElementById('playersContainer').innerHTML =
+                        `<div class="empty-state"><span>⚠️</span>Could not load data. Using local storage.<br><button class="btn btn-info" onclick="fetchData()">Retry</button></div>`;
+                }
             }
         }
 
         async function saveData() {
             if (!data) return toast('No data to save', 'error');
-            // stop all timers before save (preserve state)
+            
+            // Always save to localStorage as backup
+            localStorage.setItem('gameTrackerData', JSON.stringify(data));
+            
+            if (USE_LOCAL_STORAGE || API_KEY === 'YOUR_API_KEY_HERE') {
+                toast('💾 Data saved to local storage!', 'success');
+                return;
+            }
+            
             try {
                 const res = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}`, {
                     method: 'PUT',
@@ -493,10 +553,16 @@
                     },
                     body: JSON.stringify(data)
                 });
+                
+                if (res.status === 401) {
+                    toast('⚠️ Invalid API key! Saved to local storage only.', 'error');
+                    return;
+                }
+                
                 if (!res.ok) throw new Error('Save failed');
-                toast('💾 Data saved!', 'success');
+                toast('💾 Data saved to JSONBin!', 'success');
             } catch (err) {
-                toast('❌ Error saving: ' + err.message, 'error');
+                toast('❌ Error saving to JSONBin: ' + err.message + ' (saved locally)', 'error');
             }
         }
 
@@ -504,6 +570,10 @@
         //  PLAYER ACTIONS
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         function addPlayer() {
+            if (!data) {
+                toast('⚠️ Data not loaded yet!', 'error');
+                return;
+            }
             const input = document.getElementById('newPlayerName');
             const name = input.value.trim();
             if (!name) return toast('Please enter a name', 'error');
@@ -522,6 +592,7 @@
         }
 
         function removePlayer(id) {
+            if (!data || !data.players[id]) return;
             if (!confirm(`Remove "${data.players[id].displayName}"?`)) return;
             delete data.players[id];
             render();
@@ -530,6 +601,7 @@
         }
 
         function renamePlayer(id) {
+            if (!data || !data.players[id]) return;
             const current = data.players[id].displayName;
             const newName = prompt('Enter new name:', current);
             if (!newName || newName.trim() === '') return;
@@ -543,6 +615,7 @@
         //  TIMER ACTIONS
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         function toggleTimer(playerId) {
+            if (!data) return toast('Data not loaded!', 'error');
             const player = ensurePlayer(playerId);
             const today = getToday();
             const session = ensureToday(player);
@@ -570,7 +643,8 @@
         }
 
         function resetDay(playerId) {
-            const player = ensurePlayer(playerId);
+            if (!data || !data.players[playerId]) return;
+            const player = data.players[playerId];
             const today = getToday();
             if (!player.sessions[today]) return toast('No session today', 'error');
             if (player.sessions[today].isRunning) {
@@ -585,8 +659,8 @@
         }
 
         function getTodayPlaytime(playerId) {
+            if (!data || !data.players[playerId]) return 0;
             const player = data.players[playerId];
-            if (!player) return 0;
             const today = getToday();
             const sess = player.sessions[today];
             if (!sess) return 0;
@@ -598,11 +672,10 @@
         }
 
         function getWeekPlaytime(playerId) {
+            if (!data || !data.players[playerId]) return 0;
             const player = data.players[playerId];
-            if (!player) return 0;
             const week = getWeekNumber(getToday());
             let total = 0;
-            // sum all days in this week
             const today = getToday();
             for (const [date, sess] of Object.entries(player.sessions)) {
                 if (getWeekNumber(date) === week) {
@@ -617,8 +690,8 @@
         }
 
         function getDayHistory(playerId) {
+            if (!data || !data.players[playerId]) return [];
             const player = data.players[playerId];
-            if (!player) return [];
             const today = getToday();
             const entries = Object.entries(player.sessions)
                 .sort((a, b) => b[0].localeCompare(a[0]))
@@ -638,6 +711,11 @@
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         function render() {
             const container = document.getElementById('playersContainer');
+            if (!data || !data.players) {
+                container.innerHTML = `<div class="empty-state"><span>⚠️</span>No data available</div>`;
+                return;
+            }
+            
             const playerIds = Object.keys(data.players);
             if (playerIds.length === 0) {
                 container.innerHTML =
@@ -703,7 +781,8 @@
             // update live timers every second
             if (window.liveInterval) clearInterval(window.liveInterval);
             window.liveInterval = setInterval(() => {
-                for (const id of playerIds) {
+                if (!data || !data.players) return;
+                for (const id of Object.keys(data.players)) {
                     const el = document.getElementById(`today-${id}`);
                     if (el) {
                         const p = data.players[id];
